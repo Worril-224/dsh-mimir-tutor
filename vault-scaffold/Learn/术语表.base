@@ -1,0 +1,13 @@
+filters:
+  and:
+    - file.inFolder("Learn/Glossary")
+views:
+  - type: table
+    name: 术语
+    order:
+      - file.name
+      - field
+      - taught
+    sort:
+      - property: field
+        direction: asc

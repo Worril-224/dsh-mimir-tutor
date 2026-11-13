@@ -1,0 +1,14 @@
+filters:
+  and:
+    - file.inFolder("Learn/Concepts")
+views:
+  - type: table
+    name: 概念
+    order:
+      - file.name
+      - status
+      - review_due
+      - fragile
+    sort:
+      - property: review_due
+        direction: asc

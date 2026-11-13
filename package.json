@@ -1,0 +1,49 @@
+{
+  "name": "dsh-mimir-tutor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Mimir Tutor for DeepSeek Harness 0.2.2: an unofficial port of tommyhedgerow's Obsidian Socratic tutor preset, with 9 method skills and 6 specialist sub-agent presets.",
+  "license": "MIT",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "skills",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "author": "Worril",
+  "contributors": [
+    {
+      "name": "tommyhedgerow",
+      "url": "https://github.com/tommyhedgerow",
+      "role": "original Mimir preset"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Worril-224/dsh-mimir-tutor.git"
+  },
+  "homepage": "https://github.com/Worril-224/dsh-mimir-tutor#readme",
+  "bugs": {
+    "url": "https://github.com/Worril-224/dsh-mimir-tutor/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "dsh-plugin",
+    "mimir",
+    "obsidian",
+    "tutor",
+    "agent-preset"
+  ]
+}
