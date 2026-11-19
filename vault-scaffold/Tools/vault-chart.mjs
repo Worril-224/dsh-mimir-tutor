@@ -186,14 +186,29 @@ function splitFrontmatter(text) {
 /* ------------------------------------------------------------------ vault */
 
 function markdownFiles(dir) {
-  try {
-    return readdirSync(dir)
-      .filter((name) => name.endsWith('.md') && !name.startsWith('.'))
-      .map((name) => join(dir, name))
-      .filter((path) => statSync(path).isFile())
-  } catch {
-    return []
+  const found = []
+  const walk = (current) => {
+    let names
+    try {
+      names = readdirSync(current)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      if (name.startsWith('.')) continue
+      const path = join(current, name)
+      let info
+      try {
+        info = statSync(path)
+      } catch {
+        continue
+      }
+      if (info.isDirectory()) walk(path)
+      else if (info.isFile() && name.endsWith('.md')) found.push(path)
+    }
   }
+  walk(dir)
+  return found
 }
 
 function loadConcepts() {

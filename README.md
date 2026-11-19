@@ -192,6 +192,7 @@ dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor
 
 ## Changelog
 
+- **v1.2.1** — `vault-map.mjs` / `vault-chart.mjs` 递归扫描 `Concepts/` 子目录，否则暂存格里的概念会被当成不存在。
 - **v1.2.0** — `Concepts/待学习/`、`Concepts/待复习/` 两个暂存格：新节点先落待学习，检查通过移回；到期复习移入待复习，记录完再移回；技能、管理员简报与 vault-scaffold 同步。
 - **v1.1.0** — 讲授按七件事展开；题干自足 + `注：` 注释；出题员输出扩展为六字段；复习题规范对齐。
 - **v1.0.0** — 首个 0.2.2 移植版本。
