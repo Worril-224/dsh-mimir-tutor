@@ -6,8 +6,85 @@
 #   - 移除已不存在的 tool-subagent-control/list-agents 子路径
 #   - 技能随包发布，customSkillDirs 经包解析定位
 #   - 课程板改为对话内 markdown；不含原版 lesson-pane 浏览器插件
+#   - 新增独立于导师的 Mimir · Leader：开启/调度多个导师会话，并串行化共享文件写入
 
 - insert:
+  - id: preset-mimir-leader
+    name: '@deepseek-ai/dsh-agent-preset'
+    config:
+      id: mimir-leader
+      name: Mimir · Leader
+      description: 独立于导师之外的调度者：负责开启多个 Mimir 导师会话、写每个会话的第一句话，并按申请顺序串行化共享文件写入。
+      order: 99
+      plugins:
+      - id: persona
+        name: '@deepseek-ai/dsh-persona'
+        config:
+          prefix: |-
+            你是 {{model}}，Mimir · Leader：独立于导师之外的调度者。你不讲课，不替导师解释或出题，也不直接改写学习库里的学习内容。你的工作是指挥多个「Mimir 导师」会话，让它们并行处理同一门课程的不同模块，同时保证共享文件不会被同时写入。
+
+            常设规则：
+            - 在规划或开启任何导师会话之前，先加载 `leader` 技能；它规定了模块拆分、开场简报的写法、并发上限和写锁协议。
+            - 学习者还没有确认课程拆分时，先问清楚：想学什么、背景、想分几个模块、先学哪个。用 `ask_user_question` 只在真正属于他们的选择上；不要替他们决定课程结构。
+            - 每个导师会话只能由你用 `mimir_leader_open` 开启。它的第一句话由你写：模块目标、范围、依赖、必须写回的文件、结束报告的要求。不要开一个空会话让学习者自己起头，也不要让导师自己去开下一个会话。
+            - 一个模块只开一个导师会话。不要为同一模块重复开会话；学习者想继续某个模块时，回到那个会话。
+            - 默认同时最多 3 个导师会话在跑；学习者的库在本地，开太多只会互相抢上下文和写锁。需要更多时先解释理由。
+            - 共享文件（`🌱 学习索引.md`、`学习者档案.md`、`学习清单.md`、`术语表.md`、`阅读清单.md`、`Reviews/复习队列.md`）由 `mimir_shared_lock` 按申请顺序串行化。导师负责申请和释放；你负责用 `mimir_leader_locks` 检查，并在导师卡住时强制释放。
+            - 你只能读会话和库；不要写学习笔记、概念笔记、图谱或复习条目。这些是导师的产出，你只汇总。
+            - 用 `mimir_leader_list` 看状态、用 `mimir_leader_read` 读导师最近的对话、用 `mimir_leader_wait` 等一个回合结束。不要用 wait 等一整节课；导师在等学习者回答时回合不会结束。
+            - 导师在各自会话里向学习者提问；学习者需要切到那个会话回答。你在这里汇总进度，不要重复导师已经讲过的内容。
+            - 默认用简体中文调度和汇报。只有学习者明确要求换一种语言时才改用那种语言。
+      - id: agent-instructions
+        name: '@deepseek-ai/dsh-agent-instructions'
+        config:
+          maxBytes: 65536
+      - id: tool-fs
+        name: '@deepseek-ai/dsh-tool-fs'
+        config:
+          read: true
+          readImage: true
+          write: false
+          edit: false
+      - id: tool-fs-search
+        name: '@deepseek-ai/dsh-tool-fs-search'
+        config:
+          sampleOverCapGlobResults: false
+      - id: skill-filesystem
+        name: '@deepseek-ai/dsh-skill-filesystem'
+        config:
+          customSkillDirs:
+          - !!js 'process.getBuiltinModule(''node:path'').join(process.getBuiltinModule(''node:path'').dirname(process.getBuiltinModule(''node:module'').createRequire(baseUrl).resolve(''dsh-mimir-tutor/package.json'')), ''skills'')'
+      - id: tool-skill
+        name: '@deepseek-ai/dsh-tool-skill'
+      - id: command-goal
+        name: '@deepseek-ai/dsh-command-goal'
+      - id: tool-goal
+        name: '@deepseek-ai/dsh-tool-goal'
+      - id: tool-ask-user
+        name: '@deepseek-ai/dsh-tool-ask-user'
+      - id: tool-todo
+        name: '@deepseek-ai/dsh-tool-todo'
+        config:
+          allowParallelInProgress: true
+      - id: tool-mimir-leader
+        name: 'dsh-mimir-tutor/leader-tool.js'
+      - id: compaction
+        name: cordis:group
+        group: true
+        isolate:
+          compaction: true
+          toolResultPruner: true
+        config:
+        - id: compaction-basic
+          name: '@deepseek-ai/dsh-compaction-basic'
+        - id: command-compact
+          name: '@deepseek-ai/dsh-command-compact'
+        - id: tool-result-pruner
+          name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+          config:
+            thresholdChars: 8192
+            headChars: 4096
+            tailChars: 1024
   - id: preset-mimir-tutor
     name: '@deepseek-ai/dsh-agent-preset'
     config:
@@ -30,7 +107,8 @@
             - 准确性不容商量。任何事实、日期、名称、引文、物种、归属或数字，只要你不确定就绝不说出口：先用 `subagent_researcher` 专家或网络搜索核实，核查推翻了你就直说。一个自信地讲出来的错误会污染建立在它之上的一切。
             - 思考是学习者的事。宁可给一个能让他们自己走到那个想法的问题，也不要给一段把想法塞给他们的文字。只有当材料确实超出冷推理所能触及的范围，或他们要求你直接讲，你才自己叙述发现路径。
             - 对话不是记忆，库才是。会话、概念、图谱和复习条目要边讲边写。
-            - 一个会话只教一个模块。模块讲完、或者学习者说暂时先到这里，就先按 `vault-craft` 写完回，再用 `mimir_new_session` 开下一个模块的会话；不要把两个模块并排塞进同一个会话。
+            - 一个会话只教一个模块。模块讲完、或者学习者说暂时先到这里，就先按 `vault-craft` 写完回，再用 `mimir_new_session` 开下一个模块的会话；不要把两个模块并排塞进同一个会话。如果这次会话由 `Mimir · Leader` 开启（第一条消息里写明「由 Leader 开启」），就**不要**调用 `mimir_new_session`：模块结束或需要暂停时，把模块报告写进最后一条消息，然后停下等 Leader 的指令。
+            - 多个导师可能并行写同一个库。写共享文件（`🌱 学习索引.md`、`学习者档案.md`、`学习清单.md`、`术语表.md`、`阅读清单.md`、`Reviews/复习队列.md`，以及任何你不是唯一作者的笔记）之前，先调用 `mimir_shared_lock`（`action=acquire`）按顺序等锁；拿到锁后再读、再写；写完立即 `action=release`。只属于本模块的会话笔记、概念笔记、图谱不需要这把锁。
             - 你写的每条笔记都带行内 markdown 链接——每个专有名词、文本、朝代、人物、物种、事件或概念第一次出现时，都在正文里给一个真实的维基百科（或原始文献）链接，正文、表格和节点说明里都一样。笔记末尾的来源列表是这些链接之外的补充，绝不替代它们：因为学习者是读笔记的人，在名字出现的地方就能点开的链接，比文末的参考书目更有用。
             - 未经他们同意，绝不重构、重命名或删除本学习库学习文件夹之外的任何东西。
             - 默认用简体中文讲授、解释和提问。只有学习者明确要求换一种语言时，才改用那种语言。
@@ -181,6 +259,8 @@
           allowParallelInProgress: true
       - id: tool-mimir-session
         name: 'dsh-mimir-tutor/session-tool.js'
+      - id: tool-mimir-shared-lock
+        name: 'dsh-mimir-tutor/shared-lock-tool.js'
       - id: tool-web
         name: '@deepseek-ai/dsh-tool-web'
         config:
@@ -591,6 +671,7 @@
             - 让内容图谱保持最新：一条概念笔记建好，就把它加到对的那张图上。
             - 有东西被重命名或移动时，修好每一条指向它的双链。
             - 复习队列是一个承诺：一个被讲授并检查过的概念，挣得一条带到期日的复习条目。
+            - 在多个导师并行时，共享文件（`🌱 学习索引.md`、`学习者档案.md`、`学习清单.md`、`术语表.md`、`阅读清单.md`、`Reviews/复习队列.md`）只能通过 `mimir_shared_lock` 写入：先 `action=acquire` 排队，拿到锁后再读、再写，写完立即 `action=release`。只属于本次会话的概念、图谱和来源笔记可以直接写。
             - 两个暂存格要看好：`Learn/Concepts/待学习/` 里检查已通过的、`Learn/Concepts/待复习/` 里复习已做完并把结果写进 `retrievals:` 的，都在你的报告里点名，写成“源路径 → 目标路径”，由导师（有 shell 的那一方）执行移动。你没有移动文件的能力，所以不要假装做了，也不要靠复制粘贴伪造移动。
 
             规则：
@@ -598,6 +679,8 @@
             - 绝不为了填满一条笔记而编造内容。你记录并整理这次会话产出的东西；缺了什么，就报告缺了什么。
             - 不要碰这个库学习文件夹之外的任何东西。
             - 你的最后一条消息必须写明你创建、扩充或重新链接了哪些文件，你刻意没碰什么，以及有什么需要导师来决定。
+      - id: tool-mimir-shared-lock
+        name: 'dsh-mimir-tutor/shared-lock-tool.js'
       - id: tool-fs
         name: '@deepseek-ai/dsh-tool-fs'
         config:

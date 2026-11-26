@@ -70,11 +70,12 @@
 
 ## 这是什么
 
-一个 DSH **bundle**，安装后向当前 profile 注册 **7 个 agent preset**：
+一个 DSH **bundle**，安装后向当前 profile 注册 **8 个 agent preset**：
 
 | preset id | 名称 | 作用 |
 | --- | --- | --- |
 | `mimir-tutor` | Mimir 导师 | 主导师：探测 → 计划 → 逐节点讲授；9 项方法技能 |
+| `mimir-leader` | Mimir · Leader | 独立于导师的调度者：开启多个导师会话、写每个会话的第一句话，并按申请顺序串行化共享文件写入 |
 | `mimir-researcher` | Mimir · 核查员 | 维基百科优先、8 次调用上限的事实核查 |
 | `mimir-cartographer` | Mimir · 制图员 | 规划前测绘主题的依赖结构 |
 | `mimir-diagram-maker` | Mimir · 绘图员 | 把图写进 `Learn/Viz/` |
@@ -82,7 +83,7 @@
 | `mimir-sophist` | Mimir · 诘问者 | 对抗性攻击主张或课程计划 |
 | `mimir-librarian` | Mimir · 管理员 | 维护会话、概念、图谱、复习队列 |
 
-六个专家是独立的 agent preset，导师通过 `tool-subagent` 的 `agentPreset:` 引用；`maxDepth: 1` 保证专家不能再往下递归。
+六个专家是独立的 agent preset，导师通过 `tool-subagent` 的 `agentPreset:` 引用；`maxDepth: 1` 保证专家不能再往下递归。`mimir-leader` 不教课，也不写学习内容；它只调度导师会话。
 
 ## 教学深度与题目规范（v1.1）
 
@@ -126,7 +127,23 @@ Learn/Concepts/
 
 为什么值得这一步：每个会话只装一个模块，每轮上下文只付这一份钱；三个模块挤在一起，每轮都要重读前面所有模块的历史。工具只建会话、设标题，**不替学习者发第一条消息**。
 
-实现：`session-tool.js`（只依赖 `node:crypto`，避免从 profile 解析 Harness 包），在 `mimir-tutor` 预设里挂一行工具 `mimir_new_session`；它通过 Host 的 `agents.create` + `agentPresets.mount` 建会话，用 `sessionTitles.rename` 设标题。
+实现：`session-tool.js`（只依赖 `node:crypto`，避免从 profile 解析 Harness 包），在 `mimir-tutor` 预设里挂一行工具 `mimir_new_session`；它通过 Host 的 `agents.create` + `agentPresets.mount` 建会话，用 `sessionTitle.rename` 设标题。
+
+## Leader 模式（v1.4）
+
+`mimir-leader` 是一个**独立于导师之外**的预设。它不讲课、不写学习笔记，只做三件事：
+
+1. **开导师会话**：用 `mimir_leader_open` 建一个同工作目录、`mimir-tutor` 预设的会话，设置标题，并**由 Leader 写它的第一句话**。导师看到的第一条消息就是 Leader 写的模块简报：目标、范围、依赖、写回要求、结束报告格式。工具会自动补上调度约定（不要自己开新会话、共享文件先申请写锁、结束写模块报告）。
+2. **调度导师**：`mimir_leader_list` 看状态，`mimir_leader_read` 读最近对话，`mimir_leader_wait` 等一个回合结束，`mimir_leader_send` 发后续指令（`steer` 可中途纠偏），`mimir_leader_stop` 中止跑偏的回合。
+3. **串行化共享写入**：`mimir_shared_lock` 是一把**全局 FIFO 写锁**。导师写共享文件（`🌱 学习索引.md`、`学习者档案.md`、`学习清单.md`、`术语表.md`、`阅读清单.md`、`Reviews/复习队列.md`）之前先 `action=acquire` 排队，按申请顺序拿到锁后再读、再写，写完 `action=release`。锁在回合结束、会话关闭、180 秒超时或 Leader 强制释放时自动回收。**这条检查是强制的**：没有锁时，普通 `write` / `edit` / `apply_patch` 直接写这些文件会被拒绝，而不只是 `mimir_shared_lock` 一个工具的约定。
+
+默认建议同时最多 **3 个**导师会话。模块之间没有依赖时可以并行；有依赖时，Leader 按依赖顺序开。学习者在左侧会话列表里切换到各个导师会话上课，在 Leader 会话里看总进度。
+
+为什么不是让导师各自读写：多个会话同时改同一个学习清单或复习队列，后写的会覆盖先写的；锁让它们按申请顺序依次写入，读到的也是上一个导师写完的版本。
+
+> 工具只负责开启会话和发第一句话，不会替学习者回答导师的问题。导师在自己的会话里提问，学习者切过去回答。
+>
+> Leader 的导师名册和写锁队列都在 Host 进程内。Host 重启后，旧导师会话的对话和笔记仍在磁盘和会话列表里，但 Leader 不能在本次运行里继续调度它们；`mimir_leader_list` 会把它们标成 `offline`，需要时重新开启或直接打开旧会话。
 
 ## 安装
 
@@ -142,7 +159,7 @@ plugin_manager  action: install_bundle  target: /绝对路径/dsh-mimir-tutor
 dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor
 ```
 
-安装后重启 Host（Desktop 重开应用或 `dsh web`），新会话的预设选择器里会出现 **Mimir 导师**。
+安装后重启 Host（Desktop 重开应用或 `dsh web`），新会话的预设选择器里会出现 **Mimir 导师** 和 **Mimir · Leader**。
 
 > 如果目标 profile 里已有 `git+https://` 依赖且当前网络拉不动 GitHub，`install_bundle` 的 pnpm 阶段可能失败在那些依赖上（不是本包）。这时可以先把本包软链进 `~/.dsh/profiles/<profile>/node_modules/dsh-mimir-tutor`，再用 `plugin_manager action: set_bundle target: dsh-mimir-tutor enabled: true` 启用；详见 [vault-scaffold/README.md](vault-scaffold/README.md) 的说明。
 
@@ -160,7 +177,17 @@ dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor
 
 4. 它会先探测、再给依赖图、等你点头后逐节点讲授，并往 `Learn/Sessions/`、`Learn/Concepts/` 等写回。
 
-> 列表里还会出现 6 个 `Mimir · …` 子预设，那是给导师内部委派用的，不需要手动选。
+如果想让多个模块并行，再开一个会话：**工作目录相同，预设选 Mimir · Leader**，然后：
+
+```text
+我想把「概率论入门」分成条件概率、随机变量、极限定理三个模块并行学。
+我的背景：会集合和古典概型，没学过随机变量。
+请先给我模块拆分和依赖顺序，等我确认后开导师会话；共享文件用写锁排队。
+```
+
+Leader 会先和你确认拆分，再为每个模块调用 `mimir_leader_open`，写好第一句话并开一个「Mimir 导师」会话。你切到对应会话上课，回到 Leader 会话看进度。默认最多并行 3 个；模块有依赖时它会按顺序开。
+
+> 列表里还会出现 6 个 `Mimir · …` 专家子预设，那是给导师内部委派用的，不需要手动选；`Mimir · Leader` 是独立调度入口，需要并行上课时手动选它。
 
 ## 与 0.1.2 原版的差异
 
@@ -172,13 +199,16 @@ dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor
 | 提示词变量 | 使用 `{{cwd}}` | 已移除（0.2.2 会拒绝未知变量） |
 | 课程板 | `mimir_board` 工具 / `lesson-pane` 浏览器插件 | 对话内 markdown 课程板 |
 | 技能目录 | 预设相对 `skills/` | 包内 `skills/`，经 `createRequire(baseUrl)` 定位 |
+| 多会话调度 | 无 | 新增独立的 `mimir-leader` 预设；导师之间用 `mimir_shared_lock` 按 FIFO 串行写共享文件 |
 | 模板与 Tools | 原仓库自带 | `vault-scaffold/` 重建；`vault-map.mjs`、`vault-chart.mjs` 为重新实现，发布/PDF/Anki 脚本未包含 |
 
 ## 验证状态
 
-- 7 个预设声明行已在 DSH Desktop `0.2.2-rc.2` 上注册，`fiberPhase: active`。
+- 既有 7 个预设声明行已在 DSH Desktop `0.2.2-rc.2` 上注册，`fiberPhase: active`；v1.4.0 新增的 `mimir-leader` 行、两个工具模块和 `leader` 技能已通过 YAML/语法校验与单元测试（写锁 FIFO、会话开启与第一句话），**尚未在重启后的 Host 上实测**。
+- 已用 `dsh --profile web --patch ./cordis.patch.yml --dump-config` 验证补丁可被 Loader 组合：8 个 preset 行全部展开，没有 parse/组合错误。
 - 包结构、YAML、插件包名、技能目录表达式已静态校验。
 - **完整的探测 → 计划 → 讲授流程请在目标环境按上面的“使用”步骤验证**；不同 DSH 小版本、不同库骨架都可能暴露差异。
+- Leader 的会话创建、第一句话、FIFO 写锁和跨会话调度也需要在目标环境实测；不同 Host 的 `agents.create` / 会话恢复行为可能不同。
 - 课程栏（lesson-pane）与 `publish-to-library.sh`、导出 PDF/Anki 的脚本**没有**移植。
 
 ## 仓库结构
@@ -187,9 +217,12 @@ dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor
 .
 ├── package.json          # bundle 清单（dsh.bundle.patch）
 ├── index.js              # 仅用于包解析的 ESM 入口
-├── cordis.patch.yml      # 7 个 agent preset 声明
+├── cordis.patch.yml      # 8 个 agent preset 声明
 ├── session-tool.js       # mimir_new_session：为下一个模块新开会话
-├── skills/               # 9 项方法技能
+├── leader-tool.js        # Leader 的开启/发送/查看/等待/停止/写锁工具
+├── shared-lock-tool.js   # mimir_shared_lock：导师之间的 FIFO 共享写锁
+├── coordinator.js        # 跨 presets 共享的导师名册与写锁队列
+├── skills/               # 10 项技能（含 leader 调度手册）
 ├── vault-scaffold/       # 配套的 Learn/ 模板与 Tools/ 脚本（可选）
 ├── README.md
 └── LICENSE
@@ -205,6 +238,7 @@ dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor
 
 ## Changelog
 
+- **v1.4.0** — 新增独立的 `mimir-leader` 预设与 `mimir_shared_lock`：Leader 开启并调度多个导师会话、写每个会话的第一句话；共享文件写入按 FIFO 申请顺序串行化，回合结束/会话关闭/180 秒超时/Leader 强制释放时自动回收；导师、管理员和技能同步写锁规则。新增 `leader` 技能。
 - **v1.3.1** — 修正 `mimir_new_session` 依赖的服务名（`sessionTitle`，单数），此前该行报 `waiting for sessionTitles` 导致预设加载失败。
 - **v1.3.0** — 新增 `mimir_new_session` 工具：模块结束时可新开一个同预设、同目录、标题已设好的会话，一个模块一个会话；讲授技能与人格规则同步。
 - **v1.2.1** — `vault-map.mjs` / `vault-chart.mjs` 递归扫描 `Concepts/` 子目录，否则暂存格里的概念会被当成不存在。

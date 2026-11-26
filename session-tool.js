@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { LEADER_OPENING_MARKER } from './coordinator.js'
 
 /** Plugin name shown by the loader. */
 export const name = 'mimir-new-session'
@@ -35,6 +36,23 @@ function titleOf(raw) {
   const text = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : ''
   if (text === '') throw new Error('title 不能为空；用「模块 · 本次目标」的短标题，例如「机器学习 · 线性回归」')
   return Array.from(text).slice(0, TITLE_LIMIT).join('')
+}
+
+/**
+ * Whether this tutor Session was opened by a Mimir Leader. The Leader writes a
+ * marked first message; scanning the first user turn is enough, and it does not
+ * add another durable event type to the session.
+ * @param {import('@deepseek-ai/dsh-agent').Agent} agent - the calling tutor.
+ * @returns {boolean} true when the Leader owns session openings.
+ */
+function leaderSpawned(agent) {
+  try {
+    const firstUser = agent.session.deriveMessages().find((message) => message.role === 'user')
+    if (firstUser === undefined) return false
+    return firstUser.content.some((block) => block.type === 'text' && typeof block.text === 'string' && block.text.includes(LEADER_OPENING_MARKER))
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -84,6 +102,9 @@ export function apply(ctx) {
     async execute(args, exec) {
       const caller = exec === undefined ? undefined : exec.agent
       if (caller === undefined) throw new Error('mimir_new_session 只能在一个 Mimir 导师会话里调用')
+      if (leaderSpawned(caller)) {
+        throw new Error('本次会话由 Mimir · Leader 开启：不要新开会话。把模块报告写进最后一条消息，由 Leader 决定下一个会话。')
+      }
 
       const cwd = caller.session.header.cwd
       if (cwd === undefined) throw new Error('当前会话没有工作目录，无法新开会话')
