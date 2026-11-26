@@ -163,6 +163,26 @@ function tail(value, maxLines = 6) {
 }
 
 /**
+ * The environment for a Git subprocess: the Host's environment, but without
+ * repository-location overrides that would point Git at another checkout.
+ * @returns {NodeJS.ProcessEnv} a fresh environment object.
+ */
+function gitEnv() {
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  for (const key of [
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_INDEX_FILE',
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_COMMON_DIR',
+  ]) {
+    delete env[key]
+  }
+  return env
+}
+
+/**
  * Run one Git command with a controlled environment. Returns instead of
  * throwing so callers can decide which failures are expected.
  * @param {string} cwd - working directory.
@@ -177,7 +197,7 @@ async function runGit(cwd, args, options = {}) {
       ['-c', 'core.quotepath=false', '-c', 'color.ui=false', ...args],
       {
         cwd,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        env: gitEnv(),
         timeout: options.timeoutMs ?? GIT_TIMEOUT_MS,
         maxBuffer: 8 * 1024 * 1024,
         encoding: 'utf8',
