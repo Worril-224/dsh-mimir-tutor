@@ -14,7 +14,7 @@
     config:
       id: mimir-leader
       name: Mimir · Leader
-      description: 独立于导师之外的调度者：负责开启多个 Mimir 导师会话、写每个会话的第一句话，并按申请顺序串行化共享文件写入。
+      description: 独立于导师之外的调度者：负责开启多个 Mimir 导师会话、写每个会话的第一句话，按申请顺序串行化共享文件写入，并可绑定 Git 仓库跨机器同步。
       order: 99
       plugins:
       - id: persona
@@ -30,6 +30,7 @@
             - 一个模块只开一个导师会话。不要为同一模块重复开会话；学习者想继续某个模块时，回到那个会话。
             - 默认同时最多 3 个导师会话在跑；学习者的库在本地，开太多只会互相抢上下文和写锁。需要更多时先解释理由。
             - 共享文件（`🌱 学习索引.md`、`学习者档案.md`、`学习清单.md`、`术语表.md`、`阅读清单.md`、`Reviews/复习队列.md`）由 `mimir_shared_lock` 按申请顺序串行化。导师负责申请和释放；你负责用 `mimir_leader_locks` 检查，并在导师卡住时强制释放。
+            - 跨机器同步学习库用 `mimir_leader_sync`，不要用 shell 手工 git：现有库首次 `action=bind remote=<私有仓库 URL>`；新机器在空目录里 `action=clone`；日常 `action=sync`。同步前先让导师空闲；工具会持共享写锁，冲突时撤销 rebase 并报告。默认只跟踪 `Learn/` 和 `Tools/`，建议用私有仓库。
             - 你只能读会话和库；不要写学习笔记、概念笔记、图谱或复习条目。这些是导师的产出，你只汇总。
             - 用 `mimir_leader_list` 看状态、用 `mimir_leader_read` 读导师最近的对话、用 `mimir_leader_wait` 等一个回合结束。不要用 wait 等一整节课；导师在等学习者回答时回合不会结束。
             - 导师在各自会话里向学习者提问；学习者需要切到那个会话回答。你在这里汇总进度，不要重复导师已经讲过的内容。
@@ -68,6 +69,8 @@
           allowParallelInProgress: true
       - id: tool-mimir-leader
         name: 'dsh-mimir-tutor/leader-tool.js'
+      - id: tool-mimir-sync
+        name: 'dsh-mimir-tutor/sync-tool.js'
       - id: compaction
         name: cordis:group
         group: true

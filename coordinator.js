@@ -126,7 +126,7 @@ export class Coordinator {
    * front of the queue and the previous holder has released, so the caller may
    * read-modify-write immediately after it resolves.
    * @param {string} sessionId - the applying Session.
-   * @param {{ leaderSessionId?: string, files?: string[] }} [options] - owning Leader and intended files, for display only.
+   * @param {{ leaderSessionId?: string, files?: string[], ttlMs?: number }} [options] - owning Leader, intended files for display, and an optional lease lifetime.
    * @param {AbortSignal} [signal] - cancels the application while it waits.
    * @returns {Promise<object>} the granted lease view.
    */
@@ -143,6 +143,7 @@ export class Coordinator {
       sessionId,
       leaderSessionId: options.leaderSessionId,
       files: normaliseFiles(options.files),
+      ttlMs: typeof options.ttlMs === 'number' && options.ttlMs > 0 ? options.ttlMs : undefined,
       enqueuedAt: Date.now(),
       resolve: undefined,
       reject: undefined,
@@ -206,7 +207,7 @@ export class Coordinator {
       if (this.holder !== lease) return
       this.holder = null
       this.pump()
-    }, LEASE_TTL_MS)
+    }, entry.ttlMs ?? LEASE_TTL_MS)
     // Do not keep the process alive only for a lease timeout.
     if (typeof lease.timer.unref === 'function') lease.timer.unref()
 

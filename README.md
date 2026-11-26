@@ -75,7 +75,7 @@
 | preset id | 名称 | 作用 |
 | --- | --- | --- |
 | `mimir-tutor` | Mimir 导师 | 主导师：探测 → 计划 → 逐节点讲授；9 项方法技能 |
-| `mimir-leader` | Mimir · Leader | 独立于导师的调度者：开启多个导师会话、写每个会话的第一句话，并按申请顺序串行化共享文件写入 |
+| `mimir-leader` | Mimir · Leader | 独立于导师的调度者：开启多个导师会话、写每个会话的第一句话，按申请顺序串行化共享文件写入，并可绑定 GitHub 仓库跨机器同步 |
 | `mimir-researcher` | Mimir · 核查员 | 维基百科优先、8 次调用上限的事实核查 |
 | `mimir-cartographer` | Mimir · 制图员 | 规划前测绘主题的依赖结构 |
 | `mimir-diagram-maker` | Mimir · 绘图员 | 把图写进 `Learn/Viz/` |
@@ -129,13 +129,14 @@ Learn/Concepts/
 
 实现：`session-tool.js`（只依赖 `node:crypto`，避免从 profile 解析 Harness 包），在 `mimir-tutor` 预设里挂一行工具 `mimir_new_session`；它通过 Host 的 `agents.create` + `agentPresets.mount` 建会话，用 `sessionTitle.rename` 设标题。
 
-## Leader 模式（v1.4）
+## Leader 模式（v1.4+）
 
 `mimir-leader` 是一个**独立于导师之外**的预设。它不讲课、不写学习笔记，只做三件事：
 
 1. **开导师会话**：用 `mimir_leader_open` 建一个同工作目录、`mimir-tutor` 预设的会话，设置标题，并**由 Leader 写它的第一句话**。导师看到的第一条消息就是 Leader 写的模块简报：目标、范围、依赖、写回要求、结束报告格式。工具会自动补上调度约定（不要自己开新会话、共享文件先申请写锁、结束写模块报告）。
 2. **调度导师**：`mimir_leader_list` 看状态，`mimir_leader_read` 读最近对话，`mimir_leader_wait` 等一个回合结束，`mimir_leader_send` 发后续指令（`steer` 可中途纠偏），`mimir_leader_stop` 中止跑偏的回合。
 3. **串行化共享写入**：`mimir_shared_lock` 是一把**全局 FIFO 写锁**。导师写共享文件（`🌱 学习索引.md`、`学习者档案.md`、`学习清单.md`、`术语表.md`、`阅读清单.md`、`Reviews/复习队列.md`）之前先 `action=acquire` 排队，按申请顺序拿到锁后再读、再写，写完 `action=release`。锁在回合结束、会话关闭、180 秒超时或 Leader 强制释放时自动回收。**这条检查是强制的**：没有锁时，普通 `write` / `edit` / `apply_patch` 直接写这些文件会被拒绝，而不只是 `mimir_shared_lock` 一个工具的约定。
+4. **跨机器同步**：`mimir_leader_sync` 可以绑定一个 GitHub/Git 仓库，把 `Learn/` 和 `Tools/` 同步到别的机器；详见下一节。
 
 默认建议同时最多 **3 个**导师会话。模块之间没有依赖时可以并行；有依赖时，Leader 按依赖顺序开。学习者在左侧会话列表里切换到各个导师会话上课，在 Leader 会话里看总进度。
 
@@ -144,6 +145,34 @@ Learn/Concepts/
 > 工具只负责开启会话和发第一句话，不会替学习者回答导师的问题。导师在自己的会话里提问，学习者切过去回答。
 >
 > Leader 的导师名册和写锁队列都在 Host 进程内。Host 重启后，旧导师会话的对话和笔记仍在磁盘和会话列表里，但 Leader 不能在本次运行里继续调度它们；`mimir_leader_list` 会把它们标成 `offline`，需要时重新开启或直接打开旧会话。
+
+## 跨机器同步（v1.5）
+
+`mimir_leader_sync` 让 Leader 把一个学习库绑定到 Git 仓库（GitHub、GitLab 或自建 Git 都行），在另一台机器上克隆并继续用。
+
+四个动作：
+
+- `status`：查看远程、分支、未提交改动和 ahead/behind，不改文件。
+- `bind`：现有库第一次绑定。在库根目录的 Leader 会话里 `action=bind remote=<私有仓库地址> branch=main`。新建仓库默认只跟踪 `Learn/`、`Tools/` 和 `.gitignore`；个人笔记、`.obsidian/` 工作区设置和 `Learn/` 之外的附件不会自动上传；`Learn/` 里的内容（包括图）会同步。要扩大范围，自己改 `.gitignore`。
+- `clone`：新机器。在一个空的库目录里开 Leader 会话，`action=clone remote=...`；工具把仓库克隆到当前目录。
+- `sync`：日常同步。先确认本 Leader 的导师都空闲；工具持有共享写锁，然后 `git add/commit` → `pull --rebase` → `push`。
+
+安全边界：
+
+- 工具只允许操作 Leader 工作目录内的路径，并要求该目录就是仓库根；不会同步父目录里的其他仓库。
+- 同步前会拒绝仍在运行的导师；同步期间持有共享写锁，防止导师在 rebase 中间写共享文件。
+- 默认只跟踪 `Learn/` 和 `Tools/`；如果库原来已经是 Git 仓库，`bind` 沿用它的 `.gitignore`，不会替你改写忽略规则或提交；`sync` 会按现有 `.gitignore` 提交。先看 `status` 再 `sync`。
+- 冲突时 `pull --rebase` 失败，工具列出冲突文件并执行 `rebase --abort`，本地提交保留；不会自动选边。
+- 认证用本机 Git 的 SSH key / credential helper；工具不会弹窗要密码，也不保存 token。HTTPS 需要代理时，给 Git 配 `http.proxy`，或改用 SSH。
+- 学习资料建议用私有仓库；工具不会替你创建 GitHub 仓库，先在网页上建一个空仓库。
+
+示例：
+
+```text
+用 mimir_leader_sync 绑定我的私有仓库 https://github.com/me/learn-vault.git，分支 main。
+```
+
+首次 push 后，在另一台机器上建一个空目录，开 Leader，`clone`；之后每天 `sync`。不要在两台机器上同时 sync 同一分支。
 
 ## 安装
 
@@ -200,15 +229,17 @@ Leader 会先和你确认拆分，再为每个模块调用 `mimir_leader_open`�
 | 课程板 | `mimir_board` 工具 / `lesson-pane` 浏览器插件 | 对话内 markdown 课程板 |
 | 技能目录 | 预设相对 `skills/` | 包内 `skills/`，经 `createRequire(baseUrl)` 定位 |
 | 多会话调度 | 无 | 新增独立的 `mimir-leader` 预设；导师之间用 `mimir_shared_lock` 按 FIFO 串行写共享文件 |
+| 跨机器同步 | 无 | `mimir_leader_sync` 绑定 Git 仓库，`bind`/`clone`/`sync` 跨机器同步 `Learn/` 与 `Tools/` |
 | 模板与 Tools | 原仓库自带 | `vault-scaffold/` 重建；`vault-map.mjs`、`vault-chart.mjs` 为重新实现，发布/PDF/Anki 脚本未包含 |
 
 ## 验证状态
 
-- 既有 7 个预设声明行已在 DSH Desktop `0.2.2-rc.2` 上注册，`fiberPhase: active`；v1.4.0 新增的 `mimir-leader` 行、两个工具模块和 `leader` 技能已通过 YAML/语法校验与单元测试（写锁 FIFO、会话开启与第一句话），**尚未在重启后的 Host 上实测**。
+- 既有 7 个预设声明行已在 DSH Desktop `0.2.2-rc.2` 上注册，`fiberPhase: active`；v1.4.0 的 `mimir-leader`、v1.5.0 的 `mimir_leader_sync` 和 `leader` 技能已通过 YAML/语法校验与单元测试。
 - 已用 `dsh --profile web --patch ./cordis.patch.yml --dump-config` 验证补丁可被 Loader 组合：8 个 preset 行全部展开，没有 parse/组合错误。
+- `mimir_leader_sync` 的 bind/clone/sync/冲突/拒绝运行中导师等 6 个场景已用本地 bare 仓库实测（不依赖 GitHub 网络），共 15 个测试通过；**尚未在重启后的 Host 上实测**。
 - 包结构、YAML、插件包名、技能目录表达式已静态校验。
 - **完整的探测 → 计划 → 讲授流程请在目标环境按上面的“使用”步骤验证**；不同 DSH 小版本、不同库骨架都可能暴露差异。
-- Leader 的会话创建、第一句话、FIFO 写锁和跨会话调度也需要在目标环境实测；不同 Host 的 `agents.create` / 会话恢复行为可能不同。
+- Leader 的会话创建、第一句话、FIFO 写锁、Git 同步和跨会话调度也需要在目标环境实测；不同 Host 的 `agents.create` / 会话恢复行为可能不同。
 - 课程栏（lesson-pane）与 `publish-to-library.sh`、导出 PDF/Anki 的脚本**没有**移植。
 
 ## 仓库结构
@@ -221,6 +252,7 @@ Leader 会先和你确认拆分，再为每个模块调用 `mimir_leader_open`�
 ├── session-tool.js       # mimir_new_session：为下一个模块新开会话
 ├── leader-tool.js        # Leader 的开启/发送/查看/等待/停止/写锁工具
 ├── shared-lock-tool.js   # mimir_shared_lock：导师之间的 FIFO 共享写锁
+├── sync-tool.js          # mimir_leader_sync：绑定 Git 仓库与跨机器同步
 ├── coordinator.js        # 跨 presets 共享的导师名册与写锁队列
 ├── skills/               # 10 项技能（含 leader 调度手册）
 ├── vault-scaffold/       # 配套的 Learn/ 模板与 Tools/ 脚本（可选）
@@ -238,6 +270,7 @@ Leader 会先和你确认拆分，再为每个模块调用 `mimir_leader_open`�
 
 ## Changelog
 
+- **v1.5.0** — Leader 新增 `mimir_leader_sync`：`bind` 绑定 Git 仓库、`clone` 新机器空目录、`sync` 提交/拉取/推送；默认只跟踪 `Learn/` 和 `Tools/`，同步前拒绝运行中的导师并持有共享写锁，冲突时撤销 rebase；新增同步测试与技能说明。
 - **v1.4.0** — 新增独立的 `mimir-leader` 预设与 `mimir_shared_lock`：Leader 开启并调度多个导师会话、写每个会话的第一句话；共享文件写入按 FIFO 申请顺序串行化，回合结束/会话关闭/180 秒超时/Leader 强制释放时自动回收；导师、管理员和技能同步写锁规则。新增 `leader` 技能。
 - **v1.3.1** — 修正 `mimir_new_session` 依赖的服务名（`sessionTitle`，单数），此前该行报 `waiting for sessionTitles` 导致预设加载失败。
 - **v1.3.0** — 新增 `mimir_new_session` 工具：模块结束时可新开一个同预设、同目录、标题已设好的会话，一个模块一个会话；讲授技能与人格规则同步。

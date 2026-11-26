@@ -1,7 +1,7 @@
 ---
 name: leader
-description: Leader 模式的调度手册——怎样把一门课拆成模块、给每个导师会话写第一句话、控制并发，以及用共享写锁让多个导师按申请顺序写同一个库。在开启或调度任何导师会话之前加载。
-whenToUse: 在 Leader 会话里做课程拆分、调用 mimir_leader_open 开启导师会话、写开场简报、处理共享文件写冲突，或在导师之间汇总进度时。
+description: Leader 模式的调度手册——怎样把一门课拆成模块、给每个导师会话写第一句话、控制并发、用共享写锁让多个导师按申请顺序写同一个库，以及用 Git 仓库跨机器同步学习资料。在开启或调度任何导师会话之前加载。
+whenToUse: 在 Leader 会话里做课程拆分、调用 mimir_leader_open 开启导师会话、写开场简报、处理共享文件写冲突、在导师之间汇总进度，或绑定/同步 GitHub 仓库时。
 ---
 
 # Mimir · Leader
@@ -90,7 +90,41 @@ whenToUse: 在 Leader 会话里做课程拆分、调用 mimir_leader_open 开启
 4. 所有模块结束或学习者说停时，确认没有导师还在 running、没有写锁还握着，再结束。
 5. 如果某个导师会话在 Host 重启后变成 `offline`，不要假装还能调度它；告诉学习者那个会话的笔记和对话仍在，下一次可以从会话列表重新打开。
 
-## 六、常见失败
+## 六、跨机器同步（GitHub）
+
+学习库在不同机器之间同步时，Git 操作也归 Leader 管：导师在写库，你在同步库，两者不能同时发生。工具是 `mimir_leader_sync`，不要自己用 shell 跑 git。
+
+**先建一个私有仓库。** 学习资料可能有个人信息；公开仓库等于把笔记发到互联网。工具不会替你建 GitHub 仓库，先在 GitHub 网页上建一个空仓库（不要勾 README），拿到地址。
+
+三个写操作（`status` 只读，放在下面的检查里）：
+
+1. **现有库，第一次绑定**：`action=bind`，`remote` 填仓库地址，`branch` 默认 `main`。
+   - 新建仓库默认只跟踪 `Learn/`、`Tools/` 和 `.gitignore`；个人笔记、`.obsidian/` 工作区设置和 `Learn/` 之外的附件不进去；`Learn/` 里的内容（包括图）会同步。要扩大范围，自己改 `.gitignore`。
+   - 如果本地目录是空的、远程已经有内容，`bind` 会自动改为 clone。
+   - 如果本地还不是 Git 仓库、又不是空的，而远程已有历史，它会拒绝而不是覆盖；换一个空目录 clone，或先手动合并。
+2. **新机器，空目录**：`action=clone`，在空的库目录里把远程克隆下来。之后这个目录就是 Leader 的工作目录。
+3. **日常**：`action=sync`。它先确认你开的导师都空闲，再持有共享写锁，然后：本地 add/commit → `pull --rebase` → `push`。
+
+**同步前的检查：**
+
+- `mimir_leader_list` 看所有导师是不是 `idle`；有 `running` 就先等，或用 `mimir_leader_stop`。工具会拒绝 running 的导师，不会替你停。
+- `action=status` 先看远程是否可达、有没有未提交改动、ahead/behind。不要在看不清状态时直接 sync。
+- 不要在两台机器上同时 sync 同一分支；也不要一边用其他 Git 客户端改同一个库，一边让 Leader sync。
+
+**冲突：**
+
+- `pull --rebase` 冲突时，工具会列出冲突文件并执行 `rebase --abort`，本地提交保留，工作区恢复干净。它不会自动选边。
+- 把冲突文件告诉学习者，让他们决定保留哪一版；需要手工合并时，先停下所有导师，再用他们自己的 Git 工具处理。处理完再 `action=sync`。
+- 如果同一个概念在两台机器上被改成不同版本，这是内容冲突，不是 Git 能替你裁决的；按 `vault-craft` 的规则合并成一条，并保留 `retrievals:` 等字段。
+
+**认证与网络：**
+
+- 工具用这台机器已有的 Git 认证：SSH key、macOS keychain 或 credential helper。它不会弹出密码框，也不会保存 token。
+- HTTPS 认证失败时，先在终端用同一个 Git 账号跑一次 `git ls-remote <仓库地址>`，确认凭据能用；SSH 则确认 `ssh -T git@github.com` 通过。
+- 如果 GitHub 需要代理，给 Git 配置 `git config --global http.proxy <代理地址>`，或用 SSH；工具本身不猜代理。
+- 首次 push 失败时，先确认远程仓库是空的还是已有历史；`bind` 不会强行覆盖。
+
+## 七、常见失败
 
 - **开了空会话**：`mimir_leader_open` 必须带 `opening`；不要只建会话让学习者自己说第一句。
 - **重复模块**：两个会话讲同一个概念。先看 `mimir_leader_list`，再开新的。

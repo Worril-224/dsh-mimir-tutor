@@ -1,9 +1,9 @@
 {
   "name": "dsh-mimir-tutor",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
-  "description": "Mimir Tutor for DeepSeek Harness 0.2.2: an unofficial port of tommyhedgerow's Obsidian Socratic tutor preset, with 9 method skills, 6 specialist sub-agent presets, and a separate Leader preset that orchestrates multiple tutor sessions with a FIFO shared-write lock.",
+  "description": "Mimir Tutor for DeepSeek Harness 0.2.2: an unofficial port of tommyhedgerow's Obsidian Socratic tutor preset, with 9 method skills, 6 specialist sub-agent presets, a separate Leader preset that orchestrates multiple tutor sessions with a FIFO shared-write lock, and Git-based cross-machine vault sync.",
   "license": "MIT",
   "main": "./index.js",
   "exports": {
@@ -11,6 +11,7 @@
     "./session-tool.js": "./session-tool.js",
     "./leader-tool.js": "./leader-tool.js",
     "./shared-lock-tool.js": "./shared-lock-tool.js",
+    "./sync-tool.js": "./sync-tool.js",
     "./coordinator.js": "./coordinator.js",
     "./package.json": "./package.json"
   },
@@ -19,6 +20,7 @@
     "session-tool.js",
     "leader-tool.js",
     "shared-lock-tool.js",
+    "sync-tool.js",
     "coordinator.js",
     "cordis.patch.yml",
     "skills",
