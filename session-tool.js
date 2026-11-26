@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 export const name = 'mimir-new-session'
 
 /** Host services this tool reads. */
-export const inject = ['tools', 'agents', 'sessions', 'agentPresets', 'sessionTitles']
+export const inject = ['tools', 'agents', 'sessions', 'agentPresets', 'sessionTitle']
 
 /** Preset every new study Session is composed from. */
 const PRESET = 'mimir-tutor'
@@ -105,7 +105,7 @@ export function apply(ctx) {
       const title = titleOf(args.title)
       let stored = title
       try {
-        stored = ctx.sessionTitles.rename(handle.agent.session, title).title
+        stored = ctx.sessionTitle.rename(handle.agent.session, title).title
       } catch {
         // A title failure must not strand a live Session; the learner can rename it.
       }

@@ -205,6 +205,7 @@ dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor
 
 ## Changelog
 
+- **v1.3.1** — 修正 `mimir_new_session` 依赖的服务名（`sessionTitle`，单数），此前该行报 `waiting for sessionTitles` 导致预设加载失败。
 - **v1.3.0** — 新增 `mimir_new_session` 工具：模块结束时可新开一个同预设、同目录、标题已设好的会话，一个模块一个会话；讲授技能与人格规则同步。
 - **v1.2.1** — `vault-map.mjs` / `vault-chart.mjs` 递归扫描 `Concepts/` 子目录，否则暂存格里的概念会被当成不存在。
 - **v1.2.0** — `Concepts/待学习/`、`Concepts/待复习/` 两个暂存格：新节点先落待学习，检查通过移回；到期复习移入待复习，记录完再移回；技能、管理员简报与 vault-scaffold 同步。
