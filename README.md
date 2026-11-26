@@ -116,6 +116,18 @@ Learn/Concepts/
 
 打包的 `vault-scaffold` 已经带好这两个子文件夹；已有库请手动补建（空文件夹在 Obsidian 里不显示，建好之后放一篇笔记进去即可看到）。
 
+## 一个模块一个会话（v1.3）
+
+长课程不再挤在一个会话里。模块讲完（或学习者说"先到这里"）时，导师先写完回，再调用新工具 `mimir_new_session` 开下一个会话：
+
+- 新会话与当前会话**同一工作目录、同一"Mimir 导师"预设**，标题直接设成「模块 · 本次目标」（如 `机器学习 · 线性回归`）；
+- 旧会话不删——它已经写完回，正好当这一模块的档案；
+- 会话列表因此就是课程目录：复习某个模块时按标题找，不用翻几十轮对话。
+
+为什么值得这一步：每个会话只装一个模块，每轮上下文只付这一份钱；三个模块挤在一起，每轮都要重读前面所有模块的历史。工具只建会话、设标题，**不替学习者发第一条消息**。
+
+实现：`session-tool.js`（只依赖 `node:crypto`，避免从 profile 解析 Harness 包），在 `mimir-tutor` 预设里挂一行工具 `mimir_new_session`；它通过 Host 的 `agents.create` + `agentPresets.mount` 建会话，用 `sessionTitles.rename` 设标题。
+
 ## 安装
 
 要求：DSH `0.2.2-rc.2` 或兼容的 0.2.x。
@@ -176,6 +188,7 @@ dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor
 ├── package.json          # bundle 清单（dsh.bundle.patch）
 ├── index.js              # 仅用于包解析的 ESM 入口
 ├── cordis.patch.yml      # 7 个 agent preset 声明
+├── session-tool.js       # mimir_new_session：为下一个模块新开会话
 ├── skills/               # 9 项方法技能
 ├── vault-scaffold/       # 配套的 Learn/ 模板与 Tools/ 脚本（可选）
 ├── README.md
@@ -192,6 +205,7 @@ dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor
 
 ## Changelog
 
+- **v1.3.0** — 新增 `mimir_new_session` 工具：模块结束时可新开一个同预设、同目录、标题已设好的会话，一个模块一个会话；讲授技能与人格规则同步。
 - **v1.2.1** — `vault-map.mjs` / `vault-chart.mjs` 递归扫描 `Concepts/` 子目录，否则暂存格里的概念会被当成不存在。
 - **v1.2.0** — `Concepts/待学习/`、`Concepts/待复习/` 两个暂存格：新节点先落待学习，检查通过移回；到期复习移入待复习，记录完再移回；技能、管理员简报与 vault-scaffold 同步。
 - **v1.1.0** — 讲授按七件事展开；题干自足 + `注：` 注释；出题员输出扩展为六字段；复习题规范对齐。

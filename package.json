@@ -1,6 +1,6 @@
 {
   "name": "dsh-mimir-tutor",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "description": "Mimir Tutor for DeepSeek Harness 0.2.2: an unofficial port of tommyhedgerow's Obsidian Socratic tutor preset, with 9 method skills and 6 specialist sub-agent presets.",
@@ -8,10 +8,12 @@
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
+    "./session-tool.js": "./session-tool.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
+    "session-tool.js",
     "cordis.patch.yml",
     "skills",
     "README.md"
