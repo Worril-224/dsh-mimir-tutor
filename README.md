@@ -182,13 +182,27 @@ Learn/Concepts/
 plugin_manager  action: install_bundle  target: /绝对路径/dsh-mimir-tutor
 ```
 
+或从 npm 安装（发布后可用；DSH 的插件页可以比较 registry 版本）：
+
+```text
+plugin_manager  action: install_bundle  target: dsh-mimir-tutor@1.5.0
+```
+
 或：
 
 ```bash
-dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor
+dsh plugin --profile web add dsh-mimir-tutor@1.5.0
+```
+
+从 GitHub 安装（开发版）：
+
+```bash
+dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor#v1.5.0
 ```
 
 安装后重启 Host（Desktop 重开应用或 `dsh web`），新会话的预设选择器里会出现 **Mimir 导师** 和 **Mimir · Leader**。
+
+> 从 npm 安装时，后续版本可以被 DSH 的插件页发现并更新；从 GitHub 安装（无论浮动分支还是 pinned commit）不会出现在自动更新列表里，需要用新的 commit/tag 重装。若你的 npm 配置使用国内镜像，镜像可能比 npmjs 晚一段时间同步。
 
 > 如果目标 profile 里已有 `git+https://` 依赖且当前网络拉不动 GitHub，`install_bundle` 的 pnpm 阶段可能失败在那些依赖上（不是本包）。这时可以先把本包软链进 `~/.dsh/profiles/<profile>/node_modules/dsh-mimir-tutor`，再用 `plugin_manager action: set_bundle target: dsh-mimir-tutor enabled: true` 启用；详见 [vault-scaffold/README.md](vault-scaffold/README.md) 的说明。
 

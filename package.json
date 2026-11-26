@@ -1,10 +1,12 @@
 {
   "name": "dsh-mimir-tutor",
   "version": "1.5.0",
-  "private": true,
   "type": "module",
   "description": "Mimir Tutor for DeepSeek Harness 0.2.2: an unofficial port of tommyhedgerow's Obsidian Socratic tutor preset, with 9 method skills, 6 specialist sub-agent presets, a separate Leader preset that orchestrates multiple tutor sessions with a FIFO shared-write lock, and Git-based cross-machine vault sync.",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
