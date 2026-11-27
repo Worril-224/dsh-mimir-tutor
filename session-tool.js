@@ -24,6 +24,26 @@ export const inject = ['tools', 'agents', 'sessions', 'agentPresets', 'sessionTi
 /** Preset every new study Session is composed from. */
 const PRESET = 'mimir-tutor'
 
+const FALLBACK_MODEL_SELECTION = Object.freeze({
+  provider: process.env.MIMIR_TUTOR_PROVIDER ?? 'deepseek-official',
+  model: process.env.MIMIR_TUTOR_MODEL ?? 'deepseek-flash',
+  reasoningEffort: process.env.MIMIR_TUTOR_EFFORT ?? 'high',
+})
+
+function resolveModelSelection(ctx) {
+  try {
+    // Read the default-model service lazily: it is optional, and declaring it
+    // as a required inject would unload this whole plugin on deployments that
+    // do not mount it.
+    const service = typeof ctx.get === 'function' ? ctx.get('agentDefaultModel') : undefined
+    const current = service?.currentSelection?.()
+    if (current?.provider !== undefined && current.model !== undefined) return current
+  } catch {
+    /* fall through */
+  }
+  return { ...FALLBACK_MODEL_SELECTION }
+}
+
 /** Longest title accepted by the session-title service, in characters. */
 const TITLE_LIMIT = 40
 
@@ -79,7 +99,7 @@ export function apply(ctx) {
         },
         next: {
           type: 'string',
-          description: '新会话的第一步：一句话说明从哪里接上，例如「先复习最小二乘，再讲正则化」。可省略。',
+          description: '写进给学习者的提示里的第一步，例如「先复习最小二乘，再讲正则化」。只出现在返回的 note 里，不会替学习者在新会话里发消息。可省略。',
         },
       },
       required: ['title'],
@@ -117,6 +137,7 @@ export function apply(ctx) {
       const handle = await ctx.agents.create({
         sessionId: `session-${randomUUID()}`,
         meta: { cwd, agentPreset: PRESET },
+        agentOptions: resolveModelSelection(ctx),
         setup: async (agentCtx, agent) => {
           await ctx.agentPresets.mount(agentCtx, PRESET)
           agent.session.append('agent-preset/selected', { agentPreset: PRESET })

@@ -1,3 +1,10 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+// The coordinator persists its roster under $DSH_HOME. Point it at a throwaway
+// home so a test run never reads or writes the developer's real Leader roster.
+process.env.DSH_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'mimir-test-'))
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { apply as applyLeader } from '../leader-tool.js'
@@ -26,10 +33,19 @@ function fakeContext() {
       },
       async create({ sessionId, meta, setup }) {
         const messages = []
+        // Completed turns are appended as they are queued, so the Leader tool's
+        // outcome watch settles immediately instead of waiting out its timeout.
+        const events = []
         const session = {
           id: sessionId,
           title: undefined,
           header: { cwd: meta.cwd, id: sessionId, agentPreset: meta.agentPreset },
+          get seq() {
+            return events.length
+          },
+          snapshotEvents() {
+            return events.slice()
+          },
           append() {},
           deriveMessages() {
             return messages.slice()
@@ -38,6 +54,8 @@ function fakeContext() {
         const agent = {
           id: sessionId,
           session,
+          /** Exactly what the tool handed to followup/steer, before any faking. */
+          rawMessages: [],
           status: 'idle',
           inbox: { nextTurn: [], nextStep: [] },
           ctx: {
@@ -49,11 +67,15 @@ function fakeContext() {
             messages.push(message)
           },
           followup(message) {
+            this.rawMessages.push(message)
             messages.push({ role: 'user', content: message.content })
+            events.push({ seq: events.length + 1, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
             this.status = 'running'
           },
           steer(message) {
+            this.rawMessages.push(message)
             messages.push({ role: 'user', content: message.content })
+            events.push({ seq: events.length + 1, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
           },
           cancel() {
             this.status = 'idle'
@@ -113,7 +135,13 @@ test('leader opens a tutor Session, titles it, and writes its first message', as
 
   assert.equal(opened.title, '概率论 · 条件概率')
   assert.match(opened.note, /已开启导师会话/)
+  assert.match(opened.note, /第一回合已完成/)
   const tutor = agents.get(opened.sessionId)
+  // Regression: the harness's serializer groups wire messages by `role`. A
+  // message without `role: 'user'` used to reach the DeepSeek adapter, which
+  // failed with TRANSPORT before any request left the process.
+  assert.equal(tutor.rawMessages[0].role, 'user')
+  assert.equal(typeof tutor.rawMessages[0].id, 'string')
   assert.ok(tutor)
   assert.equal(tutor.session.title, '概率论 · 条件概率')
   assert.equal(tutor.status, 'running')
@@ -149,7 +177,9 @@ test('leader lists, sends, reads, and stops its tutors', async () => {
     { session_id: opened.sessionId, message: '补一个二维例子。', mode: 'followup' },
     exec(leader),
   )
-  assert.match(sent.note, /next|下一轮|已把/)
+  assert.match(sent.note, /已把/)
+  assert.match(sent.note, /这一回合已完成/)
+  assert.equal(tutor.rawMessages.at(-1).role, 'user')
   const lastUser = tutor.session.deriveMessages().at(-1).content[0].text
   assert.match(lastUser, /\[Leader 指令\] 补一个二维例子/)
 

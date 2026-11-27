@@ -24,6 +24,10 @@
  * @module dsh-mimir-tutor/coordinator
  */
 
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
 /** A lease held longer than this is force-released so one stalled tutor cannot wedge the queue. */
 export const LEASE_TTL_MS = 180_000
 
@@ -32,6 +36,22 @@ export const LEADER_OPENING_MARKER = '[Mimir · Leader → 导师]'
 
 /** Registry key on `globalThis`; `Symbol.for` survives duplicate module instances. */
 const COORDINATOR_KEY = Symbol.for('dsh-mimir-tutor.leader-coordinator')
+
+/** Version of the on-disk roster shape. */
+const ROSTER_VERSION = 1
+
+/**
+ * Absolute path of the durable roster.
+ *
+ * The roster must survive a Host restart or every tutor Session becomes an
+ * orphan that no Leader can list, message, or read again. `DSH_HOME` is the
+ * harness home; the fallback matches a default install.
+ * @returns {string} the roster file path.
+ */
+function rosterPath() {
+  const home = process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh')
+  return path.join(home, 'storages', 'mimir-tutor', 'leaders.json')
+}
 
 /**
  * Return the process-wide coordinator, creating it on first use.
@@ -63,6 +83,63 @@ export class Coordinator {
     this.holder = null
     this.nextRequestId = 1
     this.nextLeaseId = 1
+    /** @type {boolean} whether the durable roster has been read once */
+    this.loaded = false
+  }
+
+  /**
+   * Read the durable roster once per process.
+   *
+   * A missing or malformed file is not an error: the first run has none, and a
+   * damaged roster must not stop the Leader from opening new Sessions.
+   */
+  ensureLoaded() {
+    if (this.loaded) return
+    this.loaded = true
+    let parsed
+    try {
+      parsed = JSON.parse(fs.readFileSync(rosterPath(), 'utf8'))
+    } catch {
+      return
+    }
+    if (parsed === null || typeof parsed !== 'object' || parsed.version !== ROSTER_VERSION) return
+    const leaders = parsed.leaders
+    if (leaders === null || typeof leaders !== 'object') return
+    for (const [leaderSessionId, records] of Object.entries(leaders)) {
+      if (!Array.isArray(records)) continue
+      const roster = new Map()
+      for (const record of records) {
+        if (record === null || typeof record !== 'object') continue
+        if (typeof record.sessionId !== 'string' || record.sessionId === '') continue
+        roster.set(record.sessionId, {
+          leaderSessionId,
+          sessionId: record.sessionId,
+          title: typeof record.title === 'string' && record.title !== '' ? record.title : record.sessionId,
+          opening: typeof record.opening === 'string' ? record.opening : undefined,
+          createdAt: typeof record.createdAt === 'number' ? record.createdAt : Date.now(),
+        })
+      }
+      if (roster.size > 0) this.leaders.set(leaderSessionId, roster)
+    }
+  }
+
+  /**
+   * Persist the roster. Best-effort by design: a read-only home directory must
+   * not turn a successful Session opening into a failed tool call.
+   */
+  saveRoster() {
+    if (!this.loaded) return
+    const leaders = {}
+    for (const [leaderSessionId, roster] of this.leaders) {
+      leaders[leaderSessionId] = [...roster.values()]
+    }
+    try {
+      const file = rosterPath()
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, `${JSON.stringify({ version: ROSTER_VERSION, leaders }, null, 2)}\n`)
+    } catch {
+      // The in-memory roster still serves this process.
+    }
   }
 
   /**
@@ -72,6 +149,7 @@ export class Coordinator {
    * @returns {object} the stored record.
    */
   registerMentor(leaderSessionId, record) {
+    this.ensureLoaded()
     let roster = this.leaders.get(leaderSessionId)
     if (roster === undefined) {
       roster = new Map()
@@ -85,6 +163,7 @@ export class Coordinator {
       sessionId: record.sessionId,
     }
     roster.set(stored.sessionId, stored)
+    this.saveRoster()
     return stored
   }
 
@@ -94,6 +173,7 @@ export class Coordinator {
    * @returns {object[]} tutor records.
    */
   mentorsOf(leaderSessionId) {
+    this.ensureLoaded()
     const roster = this.leaders.get(leaderSessionId)
     if (roster === undefined) return []
     return [...roster.values()].sort((left, right) => left.createdAt - right.createdAt)
@@ -105,6 +185,7 @@ export class Coordinator {
    * @returns {object | undefined} the record, when this process opened it.
    */
   findMentor(sessionId) {
+    this.ensureLoaded()
     for (const roster of this.leaders.values()) {
       const found = roster.get(sessionId)
       if (found !== undefined) return found

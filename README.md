@@ -185,19 +185,19 @@ plugin_manager  action: install_bundle  target: /绝对路径/dsh-mimir-tutor
 或从 npm 安装（发布后可用；DSH 的插件页可以比较 registry 版本）：
 
 ```text
-plugin_manager  action: install_bundle  target: dsh-mimir-tutor@1.5.0
+plugin_manager  action: install_bundle  target: dsh-mimir-tutor@1.6.0
 ```
 
 或：
 
 ```bash
-dsh plugin --profile web add dsh-mimir-tutor@1.5.0
+dsh plugin --profile web add dsh-mimir-tutor@1.6.0
 ```
 
 从 GitHub 安装（开发版）：
 
 ```bash
-dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor#v1.5.0
+dsh plugin --profile web add github:Worril-224/dsh-mimir-tutor#v1.6.0
 ```
 
 安装后重启 Host（Desktop 重开应用或 `dsh web`），新会话的预设选择器里会出现 **Mimir 导师** 和 **Mimir · Leader**。
@@ -284,6 +284,12 @@ Leader 会先和你确认拆分，再为每个模块调用 `mimir_leader_open`�
 
 ## Changelog
 
+- **v1.6.0** — 修复插件创建的导师会话「永远跑不完第一回合」：
+  - 根因：交给 `agent.followup()` / `agent.steer()` 的消息少了 `role: 'user'`。DSH 的 DeepSeek 序列化器按 `role` 合并相邻消息，`undefined` 会与「还没有上一条」判为相等，随后解引用空值抛 `TypeError`，被适配器包成 `TRANSPORT`（11 ms 内失败、重试 5 次）。现在按 `createUserMessage()` 的完整形状构造消息（`id` + `role` + `content` + `source`）。
+  - `ctx.agents.create()` 现在传 `agentOptions`：优先 `ctx.agentDefaultModel.currentSelection()`，取不到才用兜底常量，修掉 `has no provider/model`。
+  - `mimir_leader_open` / `mimir_leader_send` 会等第一回合落定（默认 20 秒，`MIMIR_LEADER_WAIT_MS` 可调），把「完成／失败原因／仍在运行」如实写进 note，不再一律报「正在运行」。
+  - Leader↔导师名单持久化到 `$DSH_HOME/storages/mimir-tutor/leaders.json`，Host 重启后仍能列出，不再只剩内存。
+  - 新增回归测试：断言交给 `followup` 的消息必须带 `role: 'user'`；测试用临时 `DSH_HOME` 隔离持久化。
 - **v1.5.0** — Leader 新增 `mimir_leader_sync`：`bind` 绑定 Git 仓库、`clone` 新机器空目录、`sync` 提交/拉取/推送；默认只跟踪 `Learn/` 和 `Tools/`，同步前拒绝运行中的导师并持有共享写锁，冲突时撤销 rebase；新增同步测试与技能说明。
 - **v1.4.0** — 新增独立的 `mimir-leader` 预设与 `mimir_shared_lock`：Leader 开启并调度多个导师会话、写每个会话的第一句话；共享文件写入按 FIFO 申请顺序串行化，回合结束/会话关闭/180 秒超时/Leader 强制释放时自动回收；导师、管理员和技能同步写锁规则。新增 `leader` 技能。
 - **v1.3.1** — 修正 `mimir_new_session` 依赖的服务名（`sessionTitle`，单数），此前该行报 `waiting for sessionTitles` 导致预设加载失败。

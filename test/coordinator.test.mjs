@@ -1,3 +1,10 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+// The coordinator persists its roster under $DSH_HOME. Point it at a throwaway
+// home so a test run never reads or writes the developer's real Leader roster.
+process.env.DSH_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'mimir-test-'))
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Coordinator } from '../coordinator.js'

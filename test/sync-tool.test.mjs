@@ -4,6 +4,11 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { mkdtempSync } from 'node:fs'
+
+// Isolate the coordinator's durable roster: this file also opens tutor
+// Sessions, and a test run must never touch the developer's real roster.
+process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'mimir-sync-test-'))
 import { getCoordinator } from '../coordinator.js'
 import { apply as applySync } from '../sync-tool.js'
 

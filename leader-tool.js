@@ -26,6 +26,125 @@ export const inject = ['tools', 'agents', 'agentPresets', 'sessions', 'sessionTi
 /** Every tutor Session is composed from the existing tutor preset. */
 const TUTOR_PRESET = 'mimir-tutor'
 
+const FALLBACK_MODEL_SELECTION = Object.freeze({
+  provider: process.env.MIMIR_TUTOR_PROVIDER ?? 'deepseek-official',
+  model: process.env.MIMIR_TUTOR_MODEL ?? 'deepseek-flash',
+  reasoningEffort: process.env.MIMIR_TUTOR_EFFORT ?? 'high',
+})
+
+function resolveModelSelection(ctx) {
+  try {
+    // Read the default-model service lazily: it is optional, and declaring it
+    // as a required inject would unload this whole plugin on deployments that
+    // do not mount it.
+    const service = typeof ctx.get === 'function' ? ctx.get('agentDefaultModel') : undefined
+    const current = service?.currentSelection?.()
+    if (current?.provider !== undefined && current.model !== undefined) return current
+  } catch {
+    /* fall through */
+  }
+  return { ...FALLBACK_MODEL_SELECTION }
+}
+
+/**
+ * How long a tool waits for the tutor's turn to settle before reporting
+ * "still running". A failing transport settles in seconds, so the default
+ * catches the common breakage without blocking an otherwise healthy turn.
+ */
+const TURN_WAIT_MS = (() => {
+  const raw = Number.parseInt(process.env.MIMIR_LEADER_WAIT_MS ?? '', 10)
+  return Number.isFinite(raw) && raw >= 0 ? raw : 20_000
+})()
+
+/**
+ * Build the user message a tutor receives.
+ *
+ * `agent.followup()` takes a full `UserMessage`: the harness's own
+ * `createUserMessage()` always sets `role: 'user'` and a fresh `id`. Omitting
+ * `role` here is not a cosmetic difference — the DeepSeek serializer groups
+ * adjacent messages by `role`, so an undefined role makes it compare equal to
+ * the (absent) previous wire message and then dereference it, which surfaces
+ * as `TRANSPORT` before any HTTP request is made.
+ * @param {string} text - message body.
+ * @returns {object} a user message the agent loop accepts.
+ */
+function userMessage(text) {
+  return {
+    id: randomUUID(),
+    role: 'user',
+    content: [{ type: 'text', text }],
+    source: { kind: 'user' },
+  }
+}
+
+/**
+ * Find the last `turn/end` this watch is allowed to see.
+ * @param {import('@deepseek-ai/dsh-agent').Agent} agent - the tutor.
+ * @param {number} startSeq - Session sequence captured before the message.
+ * @returns {object | undefined} the settlement event.
+ */
+function turnEndAfter(agent, startSeq) {
+  try {
+    const events = agent.session.snapshotEvents()
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index]
+      if (event.seq < startSeq) break
+      if (event.type === 'turn/end') return event
+    }
+  } catch {
+    // A session that cannot be read is reported as still running.
+  }
+  return undefined
+}
+
+/**
+ * Wait for the tutor's turn to settle and report its reason.
+ *
+ * Polling the Session log is deliberately used instead of a Host event
+ * listener: preset plugins are mounted in their own scope, so a
+ * `session/event` subscription there does not observe another Session's
+ * events. `startSeq` keeps an older turn's settlement out of the answer.
+ * @param {import('@deepseek-ai/dsh-agent').Agent} agent - the tutor.
+ * @param {number} startSeq - Session sequence captured before the message.
+ * @param {number} [timeoutMs] - how long to wait.
+ * @returns {Promise<{ kind: string, message?: string }>} the settled outcome.
+ */
+async function turnOutcome(agent, startSeq, timeoutMs = TURN_WAIT_MS) {
+  const deadline = Date.now() + timeoutMs
+  while (true) {
+    const event = turnEndAfter(agent, startSeq)
+    if (event !== undefined) {
+      const reason = event.data && event.data.reason ? event.data.reason : {}
+      if (reason.kind === 'error') {
+        const error = reason.error
+        return {
+          kind: 'error',
+          message: error instanceof Error ? error.message : String(error ?? '未知错误'),
+        }
+      }
+      return { kind: typeof reason.kind === 'string' ? reason.kind : 'completed' }
+    }
+    if (Date.now() >= deadline) return { kind: 'timeout' }
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 250)
+      if (typeof timer.unref === 'function') timer.unref()
+    })
+  }
+}
+
+/**
+ * Render one turn outcome for a model-facing note.
+ * @param {string} label - what was being attempted, e.g. 「第一回合」.
+ * @param {{ kind: string, message?: string }} outcome - settled outcome.
+ * @returns {string} a short sentence.
+ */
+function describeOutcome(label, outcome) {
+  if (outcome.kind === 'completed') return `${label}已完成。`
+  if (outcome.kind === 'error') return `${label}失败：${outcome.message}。`
+  if (outcome.kind === 'timeout') return `${label}仍在运行。`
+  return `${label}结束（${outcome.kind}）。`
+}
+
 /** Longest title accepted by the session-title service, in characters. */
 const TITLE_LIMIT = 40
 
@@ -210,7 +329,8 @@ export function apply(ctx) {
       '学习者确认课程拆分后，每个模块调用一次；一个模块只开一个会话，不要重复开同一模块。',
       'opening 是导师看到的第一条消息：写清本模块的目标、范围、依赖、必须写回的内容，以及结束时怎么报告。',
       '工具会补齐调度约定（不要自己开新会话、共享文件先申请 mimir_shared_lock、结束写模块报告），但 opening 本身必须自足。',
-      '会话与 Leader 同一工作目录、使用同一个「Mimir 导师」预设，标题已设好；调用后在学习者看得到的会话列表里出现。',
+      '会话与 Leader 同一工作目录、使用同一个「Mimir 导师」预设，标题已设好；调用后出现在学习者会话列表的「未分组」里。',
+      '返回的 note 会写明第一回合结果是完成、失败还是仍在运行；失败时把错误原文转告学习者，不要谎报成功。',
     ].join(''),
     parameters: {
       type: 'object',
@@ -262,6 +382,7 @@ export function apply(ctx) {
       const handle = await ctx.agents.create({
         sessionId: `session-${randomUUID()}`,
         meta: { cwd, agentPreset: TUTOR_PRESET },
+        agentOptions: resolveModelSelection(ctx),
         setup: async (agentCtx, agent) => {
           await ctx.agentPresets.mount(agentCtx, TUTOR_PRESET)
           agent.session.append('agent-preset/selected', { agentPreset: TUTOR_PRESET })
@@ -276,11 +397,14 @@ export function apply(ctx) {
       }
 
       const sessionId = handle.agent.id
+      // Capture the sequence before queueing: a fast transport failure settles
+      // the turn in well under a second.
+      const outcomes = turnOutcome(handle.agent, handle.agent.session.seq)
       try {
-        handle.agent.followup({
-          content: [{ type: 'text', text: buildOpening(opening, { leaderSessionId: leader.session.id, title: stored }) }],
-          source: { kind: 'user' },
-        })
+        handle.agent.followup(userMessage(buildOpening(opening, {
+          leaderSessionId: leader.session.id,
+          title: stored,
+        })))
       } catch (error) {
         // A Session without its opening would be an orphan no Leader can drive.
         try {
@@ -297,11 +421,11 @@ export function apply(ctx) {
         createdAt: Date.now(),
       })
 
-      const state = handle.agent.status === 'running' ? '正在运行' : '已排好第一句话，等待启动'
+      const outcome = await outcomes
       return {
         sessionId,
         title: stored,
-        note: `已开启导师会话《${stored}》（${sessionId}），并把你的第一句话发给它；它${state}。学习者在左侧会话列表切换过去即可。`,
+        note: `已开启导师会话《${stored}》（${sessionId}），并把你的第一句话发给它；${describeOutcome('第一回合', outcome)}学习者在左侧会话列表的「未分组」里切换过去即可。`,
       }
     },
   })
@@ -344,14 +468,13 @@ export function apply(ctx) {
       const text = typeof args.message === 'string' ? args.message.trim() : ''
       if (text === '') throw new Error('message 不能为空')
       const mode = args.mode === 'steer' ? 'steer' : 'followup'
-      const message = {
-        content: [{ type: 'text', text: `[Leader 指令] ${text}` }],
-        source: { kind: 'user' },
-      }
+      const outcomes = turnOutcome(agent, agent.session.seq)
+      const message = userMessage(`[Leader 指令] ${text}`)
       if (mode === 'steer') agent.steer(message)
       else agent.followup(message)
+      const outcome = await outcomes
       return {
-        note: `已把${mode === 'steer' ? '纠偏指令' : '下一轮消息'}发给《${record.title}》。导师当前状态：${agent.status}。`,
+        note: `已把${mode === 'steer' ? '纠偏指令' : '下一轮消息'}发给《${record.title}》。${describeOutcome('这一回合', outcome)}`,
       }
     },
   })
